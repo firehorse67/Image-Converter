@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Converter — PNG · JPG · WebP</title>
+
+<!-- PWA / favicon wiring.
+     NOTE: These references only matter when the file is *served* over http(s).
+     When opened directly via file://, browsers ignore the manifest and will not
+     register a service worker, but the tool still works fully (it's all client-side).
+     The favicon <link>s below use root-relative paths so they resolve when hosted;
+     under file:// the browser just shows a default icon, which is harmless. -->
+<link rel="icon" href="icons/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="icons/camera.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1565c0">
+
+<!-- JSZip for the "Download All as ZIP" feature.
+     Loaded from cdnjs. If the CDN is unreachable (e.g. fully offline first run),
+     the ZIP button degrades gracefully: it disables itself and tells you to use
+     the per-file download links instead. To make this tool 100% offline and
+     self-contained, vendor jszip.min.js locally and point this src at it. -->
+<script
+  src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+  integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg=="
+  crossorigin="anonymous"
+  referrerpolicy="no-referrer"></script>
+
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --primary: #1565c0;
+    --primary-dark: #0d47a1;
+    --on-primary: #ffffff;
+    --text: #1f2328;
+    --text-muted: #5f6368;
+    --border: #e0e3e7;
+    --shadow: 0 1px 3px rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.08);
+    --shadow-lg: 0 4px 12px rgba(0,0,0,.15);
+    --radius: 12px;
+    --success: #2e7d32;
+    --danger: #c62828;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  header {
+    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+    color: var(--on-primary);
+    padding: 20px 24px;
+    box-shadow: var(--shadow);
+  }
+  header .wrap { max-width: 1000px; margin: 0 auto; display: flex; align-items: center; gap: 14px; }
+  header h1 { font-size: 1.35rem; margin: 0; font-weight: 600; }
+  header p { margin: 2px 0 0; font-size: .85rem; opacity: .9; }
+  header .logo { width: 40px; height: 40px; flex: 0 0 auto; }
+
+  main { max-width: 1000px; margin: 24px auto; padding: 0 16px 60px; }
+
+  .card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+
+  /* Drop zone */
+  #dropzone {
+    border: 2px dashed #b0bec5;
+    border-radius: var(--radius);
+    padding: 44px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+    background: #fafbfc;
+  }
+  #dropzone:hover { border-color: var(--primary); background: #f0f6ff; }
+  #dropzone.dragover { border-color: var(--primary); background: #e3f0ff; }
+  #dropzone .icon { font-size: 44px; line-height: 1; }
+  #dropzone h2 { margin: 12px 0 4px; font-size: 1.05rem; font-weight: 600; }
+  #dropzone p { margin: 0; color: var(--text-muted); font-size: .9rem; }
+  #fileInput { display: none; }
+
+  /* Controls */
+  .controls { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-end; }
+  .control { display: flex; flex-direction: column; gap: 6px; }
+  .control label { font-size: .8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .3px; }
+  select, input[type="range"], input[type="color"] {
+    font: inherit;
+  }
+  select {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    min-width: 120px;
+  }
+  input[type="color"] {
+    width: 44px; height: 38px; padding: 2px; border: 1px solid var(--border);
+    border-radius: 8px; background: #fff; cursor: pointer;
+  }
+  .slider-wrap { display: flex; align-items: center; gap: 10px; }
+  input[type="range"] { width: 160px; }
+  .qval { font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; font-weight: 600; }
+  .control.disabled { opacity: .4; pointer-events: none; }
+
+  .btn {
+    font: inherit;
+    font-weight: 600;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    background: var(--primary);
+    color: var(--on-primary);
+    box-shadow: var(--shadow);
+    transition: background .15s, box-shadow .15s, opacity .15s;
+  }
+  .btn:hover:not(:disabled) { background: var(--primary-dark); box-shadow: var(--shadow-lg); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+  .btn.secondary { background: #eceff1; color: var(--text); }
+  .btn.secondary:hover:not(:disabled) { background: #dfe4e8; }
+
+  .action-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; align-items: center; }
+
+  /* Summary */
+  #summary { font-size: .92rem; color: var(--text); }
+  #summary strong { color: var(--primary-dark); }
+  .savings-pos { color: var(--success); font-weight: 600; }
+  .savings-neg { color: var(--danger); font-weight: 600; }
+
+  /* File list */
+  #fileList { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .file-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+  }
+  .thumb-wrap {
+    height: 150px; background: repeating-conic-gradient(#eceff1 0% 25%, #f7f9fa 0% 50%) 50% / 20px 20px;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .thumb-wrap img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .file-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .fname { font-weight: 600; font-size: .9rem; word-break: break-all; }
+  .meta { font-size: .8rem; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .badge {
+    display: inline-block; font-size: .7rem; font-weight: 700; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 20px; background: #eceff1; color: var(--text-muted);
+    letter-spacing: .3px;
+  }
+  .sizes { font-size: .85rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .arrow { color: var(--text-muted); }
+  .status { font-size: .8rem; font-weight: 600; }
+  .status.pending { color: var(--text-muted); }
+  .status.working { color: var(--primary); }
+  .status.done { color: var(--success); }
+  .status.error { color: var(--danger); }
+  .file-actions { display: flex; gap: 8px; margin-top: auto; align-items: center; flex-wrap: wrap; }
+  .dl-link {
+    font-size: .85rem; font-weight: 600; color: var(--primary); text-decoration: none;
+    padding: 6px 12px; border: 1px solid var(--primary); border-radius: 8px;
+  }
+  .dl-link:hover { background: #e3f0ff; }
+  .per-file-fmt { font-size: .8rem; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; }
+  .remove-x {
+    margin-left: auto; background: none; border: none; cursor: pointer; color: var(--text-muted);
+    font-size: 1.1rem; line-height: 1; padding: 4px;
+  }
+  .remove-x:hover { color: var(--danger); }
+
+  .hint { font-size: .8rem; color: var(--text-muted); margin-top: 10px; }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid #cfd8dc; border-top-color: var(--primary);
+    border-radius: 50%; display: inline-block; animation: spin .7s linear infinite; vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  footer { text-align: center; color: var(--text-muted); font-size: .8rem; padding: 20px; }
+  footer a { color: var(--primary); }
+
+  @media (max-width: 560px) {
+    header h1 { font-size: 1.15rem; }
+    input[type="range"] { width: 120px; }
+    .controls { gap: 14px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <!-- Inline camera logo (matches the favicon/PWA icon) -->
+    <svg class="logo" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="4" y="16" width="56" height="38" rx="7" fill="#fff" opacity="0.15"/>
+      <path d="M22 16l4-6h12l4 6" stroke="#fff" stroke-width="3" stroke-linejoin="round" fill="none"/>
+      <rect x="4" y="16" width="56" height="38" rx="7" stroke="#fff" stroke-width="3" fill="none"/>
+      <circle cx="32" cy="35" r="12" stroke="#fff" stroke-width="3" fill="none"/>
+      <circle cx="32" cy="35" r="5" fill="#fff"/>
+      <circle cx="50" cy="24" r="2.5" fill="#fff"/>
+    </svg>
+    <div>
+      <h1>Image Converter</h1>
+      <p>Convert PNG · JPG · WebP — 100% in your browser, nothing uploaded.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- Drop zone / picker -->
+  <div class="card">
+    <div id="dropzone" role="button" tabindex="0" aria-label="Drag images here or click to browse">
+      <div class="icon">📷</div>
+      <h2>Drag images here or click to browse</h2>
+      <p>PNG, JPG, and WebP · batch supported · files never leave your device</p>
+    </div>
+    <input type="file" id="fileInput" multiple accept="image/png,image/jpeg,image/webp,image/*">
+  </div>
+
+  <!-- Conversion controls -->
+  <div class="card" id="controlsCard" style="display:none;">
+    <div class="controls">
+      <div class="control">
+        <label for="formatSelect">Output format</label>
+        <select id="formatSelect">
+          <option value="image/png">PNG</option>
+          <option value="image/jpeg" selected>JPG</option>
+          <option value="image/webp">WebP</option>
+        </select>
+      </div>
+
+      <div class="control" id="qualityControl">
+        <label for="qualitySlider">Quality</label>
+        <div class="slider-wrap">
+          <input type="range" id="qualitySlider" min="0" max="100" value="90">
+          <span class="qval" id="qualityValue">90</span>
+        </div>
+      </div>
+
+      <div class="control" id="bgControl">
+        <label for="bgColor">Flatten color (JPG)</label>
+        <input type="color" id="bgColor" value="#ffffff">
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button class="btn" id="convertBtn">Convert all</button>
+      <button class="btn secondary" id="zipBtn" disabled>Download all as ZIP</button>
+      <button class="btn secondary" id="clearBtn">Clear</button>
+      <span id="summary"></span>
+    </div>
+    <p class="hint" id="jszipHint" style="display:none;">
+      ⚠️ ZIP library (JSZip) didn't load — the “Download all as ZIP” button is disabled.
+      Use the per-file download links, or connect once to load the library.
+    </p>
+    <p class="hint">
+      Transparent PNGs exported to JPG are flattened onto the chosen color (JPG has no transparency).
+      EXIF orientation from phone photos is honored when the browser supports it.
+    </p>
+  </div>
+
+  <!-- Per-file results -->
+  <div id="fileList"></div>
+</main>
+
+<footer>
+  Runs entirely offline · no server, no tracking, no uploads.
+</footer>
+
+<script>
+"use strict";
+
+/* ============================================================================
+ * Image Converter — single-file, client-side PNG/JPG/WebP converter.
+ *
+ * Everything runs in the browser. Source images are read from the local File
+ * objects via URL.createObjectURL — there is NO network fetch of image data at
+ * any point. Conversion is done by drawing to an offscreen <canvas> and calling
+ * canvas.toBlob(mime, quality).
+ *
+ * The only third-party code is JSZip (loaded via CDN in <head>) used solely to
+ * bundle converted files into a single ZIP download. If it fails to load, the
+ * ZIP button disables itself and per-file downloads still work.
+ * ========================================================================== */
+
+// ---- Constants & state ------------------------------------------------------
+
+const MIME_EXT = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+};
+const MIME_LABEL = {
+  "image/png": "PNG",
+  "image/jpeg": "JPG",
+  "image/webp": "WebP",
+};
+
+// Each item: { id, file, name, srcURL, srcSize, srcType, outMime|null (per-file override),
+//              blob|null, outURL|null, outSize|null, status }
+let items = [];
+let nextId = 1;
+let jszipAvailable = false;
+
+// ---- DOM refs ---------------------------------------------------------------
+
+const dropzone      = document.getElementById("dropzone");
+const fileInput     = document.getElementById("fileInput");
+const controlsCard  = document.getElementById("controlsCard");
+const formatSelect  = document.getElementById("formatSelect");
+const qualityControl= document.getElementById("qualityControl");
+const qualitySlider = document.getElementById("qualitySlider");
+const qualityValue  = document.getElementById("qualityValue");
+const bgControl     = document.getElementById("bgControl");
+const bgColor       = document.getElementById("bgColor");
+const convertBtn    = document.getElementById("convertBtn");
+const zipBtn        = document.getElementById("zipBtn");
+const clearBtn      = document.getElementById("clearBtn");
+const summary       = document.getElementById("summary");
+const fileList      = document.getElementById("fileList");
+const jszipHint     = document.getElementById("jszipHint");
+
+// ---- Helpers ----------------------------------------------------------------
+
+function formatBytes(bytes) {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const val = bytes / Math.pow(1024, i);
+  return (i === 0 ? val : val.toFixed(val < 10 ? 2 : 1)) + " " + units[i];
+}
+
+// Swap the extension on a filename to match the output format.
+// e.g. "photo.png" + "image/jpeg" -> "photo.jpg"; "no.ext.name" handled too.
+function swapExtension(name, mime) {
+  const ext = MIME_EXT[mime] || "img";
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  return base + "." + ext;
+}
+
+function friendlyType(type) {
+  return MIME_LABEL[type] || (type ? type.replace("image/", "").toUpperCase() : "Unknown");
+}
+
+// The effective output mime for an item = its per-file override, else the global.
+function outMimeFor(item) {
+  return item.outMime || formatSelect.value;
+}
+
+function isPngOut() {
+  return formatSelect.value === "image/png";
+}
+
+// Show/hide quality + flatten-color controls depending on the global format.
+function syncControlVisibility() {
+  // Quality is only meaningful for lossy formats (JPG/WebP).
+  qualityControl.classList.toggle("disabled", isPngOut());
+  // Flatten color only matters when the target is JPG (no alpha channel).
+  bgControl.classList.toggle("disabled", formatSelect.value !== "image/jpeg");
+}
+
+// ---- Loading files ----------------------------------------------------------
+
+function addFiles(fileArr) {
+  const images = Array.from(fileArr).filter(f => f.type.startsWith("image/"));
+  if (images.length === 0) return;
+
+  for (const file of images) {
+    const item = {
+      id: nextId++,
+      file,
+      name: file.name || ("image-" + Date.now()),
+      srcURL: URL.createObjectURL(file),   // local blob URL, no network
+      srcSize: file.size,
+      srcType: file.type,
+      outMime: null,
+      blob: null,
+      outURL: null,
+      outSize: null,
+      status: "pending",
+    };
+    items.push(item);
+  }
+  controlsCard.style.display = "";
+  render();
+}
+
+// ---- Conversion core --------------------------------------------------------
+
+// Load a File into an HTMLImageElement. We use decode() where available so we
+// can honor EXIF orientation (modern browsers auto-apply it for <img>).
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    // Hint the browser to apply EXIF orientation (default is "from-image").
+    // Some older engines ignore this; see the known-limitation note below.
+    img.decoding = "async";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not decode image"));
+    img.src = url;
+  });
+}
+
+/*
+ * KNOWN LIMITATION (EXIF orientation):
+ * Modern Firefox & Chrome automatically apply EXIF orientation when rendering
+ * an <img>, and drawImage() then draws it upright, so phone photos convert
+ * correctly. On engines that don't auto-orient, a rotated JPG could be drawn
+ * sideways. A fully robust fix would parse the EXIF orientation tag and rotate
+ * the canvas manually; that's deferred to v2 to keep this dependency-free.
+ */
+async function convertItem(item) {
+  const mime = outMimeFor(item);
+  const quality = Math.min(1, Math.max(0, qualitySlider.value / 100));
+
+  item.status = "working";
+  renderItem(item);
+
+  try {
+    const img = await loadImage(item.srcURL);
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+
+    // For JPG output, flatten any transparency onto the chosen solid color,
+    // because JPG has no alpha channel (transparent areas would go black).
+    if (mime === "image/jpeg") {
+      ctx.fillStyle = bgColor.value;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    ctx.drawImage(img, 0, 0, w, h);
+
+    const blob = await new Promise((resolve, reject) => {
+      // PNG ignores the quality argument (lossless); passing it is harmless.
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error("Export failed"))),
+        mime,
+        mime === "image/png" ? undefined : quality
+      );
+    });
+
+    // Release any previous output URL before replacing it.
+    if (item.outURL) URL.revokeObjectURL(item.outURL);
+
+    item.blob = blob;
+    item.outSize = blob.size;
+    item.outURL = URL.createObjectURL(blob);
+    item.outName = swapExtension(item.name, mime);
+    item.outMimeUsed = mime;
+    item.status = "done";
+  } catch (err) {
+    item.status = "error";
+    item.error = err.message;
+  }
+  renderItem(item);
+}
+
+async function convertAll() {
+  convertBtn.disabled = true;
+  zipBtn.disabled = true;
+  // Convert sequentially to keep memory bounded on large batches.
+  for (const item of items) {
+    await convertItem(item);
+  }
+  convertBtn.disabled = false;
+  updateSummary();
+  updateZipButton();
+}
+
+// ---- ZIP download -----------------------------------------------------------
+
+async function downloadZip() {
+  if (!jszipAvailable || typeof JSZip === "undefined") return;
+  const done = items.filter(i => i.status === "done" && i.blob);
+  if (done.length === 0) return;
+
+  zipBtn.disabled = true;
+  const original = zipBtn.textContent;
+  zipBtn.innerHTML = '<span class="spinner"></span> Zipping…';
+
+  const zip = new JSZip();
+  const usedNames = new Map();
+  for (const item of done) {
+    // Avoid name collisions inside the ZIP (e.g. two files named the same).
+    let name = item.outName;
+    if (usedNames.has(name)) {
+      const n = usedNames.get(name) + 1;
+      usedNames.set(name, n);
+      const dot = name.lastIndexOf(".");
+      name = name.slice(0, dot) + "-" + n + name.slice(dot);
+    } else {
+      usedNames.set(name, 1);
+    }
+    zip.file(name, item.blob);
+  }
+
+  const content = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(content);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "converted-images.zip";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+
+  zipBtn.textContent = original;
+  zipBtn.disabled = false;
+}
+
+// ---- Rendering --------------------------------------------------------------
+
+function render() {
+  fileList.innerHTML = "";
+  for (const item of items) {
+    fileList.appendChild(buildCard(item));
+  }
+  updateSummary();
+  updateZipButton();
+}
+
+function buildCard(item) {
+  const card = document.createElement("div");
+  card.className = "file-card";
+  card.dataset.id = item.id;
+  card.innerHTML = cardInner(item);
+  wireCard(card, item);
+  return card;
+}
+
+function cardInner(item) {
+  const outMime = outMimeFor(item);
+  const sizesHtml = item.status === "done"
+    ? `<span>${formatBytes(item.srcSize)}</span>
+       <span class="arrow">→</span>
+       <span>${formatBytes(item.outSize)}</span>
+       ${savingsHtml(item.srcSize, item.outSize)}`
+    : `<span>${formatBytes(item.srcSize)}</span>`;
+
+  const statusHtml = {
+    pending: '<span class="status pending">Ready</span>',
+    working: '<span class="status working"><span class="spinner"></span> Converting…</span>',
+    done:    '<span class="status done">✓ Done</span>',
+    error:   `<span class="status error">✕ ${item.error || "Error"}</span>`,
+  }[item.status];
+
+  const dlHtml = item.status === "done"
+    ? `<a class="dl-link" href="${item.outURL}" download="${item.outName}">Download ${MIME_LABEL[item.outMimeUsed]}</a>`
+    : "";
+
+  // Per-file format override select.
+  const fmtOptions = Object.keys(MIME_LABEL).map(m =>
+    `<option value="${m}" ${m === outMime ? "selected" : ""}>${MIME_LABEL[m]}</option>`
+  ).join("");
+
+  return `
+    <div class="thumb-wrap"><img src="${item.srcURL}" alt="${item.name}" loading="lazy"></div>
+    <div class="file-body">
+      <div class="fname">${item.name}
+        <button class="remove-x" title="Remove" aria-label="Remove">&times;</button>
+      </div>
+      <div class="meta">
+        <span class="badge">${friendlyType(item.srcType)}</span>
+        ${statusHtml}
+      </div>
+      <div class="sizes">${sizesHtml}</div>
+      <div class="file-actions">
+        <select class="per-file-fmt" title="Override output format for this file">${fmtOptions}</select>
+        ${dlHtml}
+      </div>
+    </div>
+  `;
+}
+
+function savingsHtml(before, after) {
+  if (!before || after == null) return "";
+  const pct = ((before - after) / before) * 100;
+  if (pct >= 0.5) return `<span class="savings-pos">−${pct.toFixed(0)}%</span>`;
+  if (pct <= -0.5) return `<span class="savings-neg">+${Math.abs(pct).toFixed(0)}%</span>`;
+  return `<span class="arrow">≈ same</span>`;
+}
+
+// Re-render a single card in place (keeps thumbnails from flickering).
+function renderItem(item) {
+  const card = fileList.querySelector(`.file-card[data-id="${item.id}"]`);
+  if (!card) return;
+  card.innerHTML = cardInner(item);
+  wireCard(card, item);
+}
+
+function wireCard(card, item) {
+  card.querySelector(".remove-x").addEventListener("click", () => removeItem(item.id));
+  const sel = card.querySelector(".per-file-fmt");
+  sel.addEventListener("change", (e) => {
+    item.outMime = e.target.value;      // per-file override
+    // Reset its converted state so the new format is applied on next convert.
+    resetItemOutput(item);
+    renderItem(item);
+    updateZipButton();
+    updateSummary();
+  });
+}
+
+function resetItemOutput(item) {
+  if (item.outURL) URL.revokeObjectURL(item.outURL);
+  item.blob = null; item.outURL = null; item.outSize = null;
+  item.outName = null; item.outMimeUsed = null;
+  if (item.status === "done") item.status = "pending";
+}
+
+function removeItem(id) {
+  const idx = items.findIndex(i => i.id === id);
+  if (idx === -1) return;
+  const [it] = items.splice(idx, 1);
+  if (it.srcURL) URL.revokeObjectURL(it.srcURL);
+  if (it.outURL) URL.revokeObjectURL(it.outURL);
+  if (items.length === 0) controlsCard.style.display = "none";
+  render();
+}
+
+function clearAll() {
+  for (const it of items) {
+    if (it.srcURL) URL.revokeObjectURL(it.srcURL);
+    if (it.outURL) URL.revokeObjectURL(it.outURL);
+  }
+  items = [];
+  controlsCard.style.display = "none";
+  fileInput.value = "";
+  render();
+}
+
+function updateSummary() {
+  const done = items.filter(i => i.status === "done");
+  if (done.length === 0) {
+    summary.textContent = items.length ? `${items.length} file(s) ready.` : "";
+    return;
+  }
+  const before = done.reduce((s, i) => s + i.srcSize, 0);
+  const after = done.reduce((s, i) => s + i.outSize, 0);
+  const pct = before ? ((before - after) / before) * 100 : 0;
+  const savingsClass = pct >= 0 ? "savings-pos" : "savings-neg";
+  const sign = pct >= 0 ? "−" : "+";
+  summary.innerHTML =
+    `<strong>${done.length}</strong> converted · ` +
+    `${formatBytes(before)} → ${formatBytes(after)} ` +
+    `(<span class="${savingsClass}">${sign}${Math.abs(pct).toFixed(0)}%</span>)`;
+}
+
+function updateZipButton() {
+  const doneCount = items.filter(i => i.status === "done").length;
+  zipBtn.disabled = !(jszipAvailable && doneCount > 0);
+}
+
+// ---- Event wiring -----------------------------------------------------------
+
+// Drop zone: click to browse, keyboard-activatable.
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+});
+fileInput.addEventListener("change", (e) => addFiles(e.target.files));
+
+["dragenter", "dragover"].forEach(evt =>
+  dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add("dragover"); })
+);
+["dragleave", "drop"].forEach(evt =>
+  dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.remove("dragover"); })
+);
+dropzone.addEventListener("drop", (e) => {
+  if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+});
+
+// Prevent the browser from navigating away if a file is dropped outside the zone.
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+
+formatSelect.addEventListener("change", () => {
+  syncControlVisibility();
+  // Changing the global format invalidates prior conversions.
+  for (const it of items) { it.outMime = null; resetItemOutput(it); }
+  render();
+});
+
+qualitySlider.addEventListener("input", () => { qualityValue.textContent = qualitySlider.value; });
+
+convertBtn.addEventListener("click", convertAll);
+zipBtn.addEventListener("click", downloadZip);
+clearBtn.addEventListener("click", clearAll);
+
+// ---- Startup ----------------------------------------------------------------
+
+function detectJSZip() {
+  jszipAvailable = (typeof JSZip !== "undefined");
+  if (!jszipAvailable) jszipHint.style.display = "";
+  updateZipButton();
+}
+
+// JSZip may still be loading when this script runs; check now and shortly after.
+window.addEventListener("load", () => {
+  detectJSZip();
+  if (!jszipAvailable) setTimeout(detectJSZip, 800);
+});
+
+// Register the service worker only when served over http(s) — never under file://.
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => { /* offline PWA is optional */ });
+  });
+}
+
+syncControlVisibility();
+</script>
+</body>
+</html>

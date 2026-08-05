@@ -1,0 +1,28 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Camera">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e88e5"/>
+      <stop offset="1" stop-color="#0d47a1"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e3f2fd"/>
+      <stop offset="1" stop-color="#90caf9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square app background -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- Camera body -->
+  <rect x="87" y="154" width="338" height="230" rx="27" fill="#ffffff"/>
+  <!-- Viewfinder hump -->
+  <rect x="189" y="120" width="134" height="42" rx="10" fill="#ffffff"/>
+
+  <!-- Lens -->
+  <circle cx="256" cy="274" r="90" fill="url(#lens)" stroke="#0d47a1" stroke-width="14"/>
+  <circle cx="256" cy="274" r="45" fill="#1565c0"/>
+  <circle cx="233" cy="251" r="16" fill="#ffffff" opacity="0.86"/>
+
+  <!-- Flash indicator -->
+  <circle cx="374" cy="192" r="15" fill="#0d47a1"/>
+</svg>
