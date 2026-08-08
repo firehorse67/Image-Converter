@@ -10,7 +10,7 @@
  * cross-origin opaque-response bloat; if you want the ZIP feature offline,
  * vendor jszip.min.js locally and add it to APP_SHELL below.
  */
-const CACHE = "image-converter-v1";
+const CACHE = "image-converter-v2";
 
 const APP_SHELL = [
   "./",

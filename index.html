@@ -167,6 +167,8 @@
     letter-spacing: .3px;
   }
   .sizes { font-size: .85rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dims { font-size: .8rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .dims code { font-family: inherit; }
   .arrow { color: var(--text-muted); }
   .status { font-size: .8rem; font-weight: 600; }
   .status.pending { color: var(--text-muted); }
@@ -258,6 +260,36 @@
         <label for="bgColor">Flatten color (JPG)</label>
         <input type="color" id="bgColor" value="#ffffff">
       </div>
+
+      <div class="control" id="resizeModeControl">
+        <label for="resizeModeSelect">Resize Mode</label>
+        <select id="resizeModeSelect">
+          <option value="none" selected>Original size</option>
+          <option value="maxDim">Max dimension (px)</option>
+          <option value="scale">Percentage (%)</option>
+          <option value="custom">Custom (W × H px)</option>
+        </select>
+      </div>
+
+      <div class="control" id="resizeValueControl" style="display:none;">
+        <label id="resizeValueLabel" for="resizeValueInput">Max Dimension</label>
+        <div class="slider-wrap">
+          <input type="number" id="resizeValueInput" min="1" max="10000" value="1920" style="width: 90px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;">
+          <span id="resizeValueUnit" style="font-weight: 600; font-size: 0.85rem; color: var(--text-muted);">px</span>
+        </div>
+      </div>
+
+      <div class="control" id="resizeCustomControl" style="display:none;">
+        <label>Custom Dimensions</label>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <input type="number" id="resizeWidthInput" placeholder="Width" min="1" max="10000" style="width: 76px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 8px;">
+          <span style="color: var(--text-muted); font-weight: 600;">×</span>
+          <input type="number" id="resizeHeightInput" placeholder="Height" min="1" max="10000" style="width: 76px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 8px;">
+          <label style="font-size: 0.8rem; font-weight: 500; display: flex; align-items: center; gap: 4px; cursor: pointer; margin: 0; color: var(--text);">
+            <input type="checkbox" id="keepAspectCheck" checked> Lock ratio
+          </label>
+        </div>
+      </div>
     </div>
 
     <div class="action-row">
@@ -337,6 +369,16 @@ const summary       = document.getElementById("summary");
 const fileList      = document.getElementById("fileList");
 const jszipHint     = document.getElementById("jszipHint");
 
+const resizeModeSelect   = document.getElementById("resizeModeSelect");
+const resizeValueControl  = document.getElementById("resizeValueControl");
+const resizeValueLabel    = document.getElementById("resizeValueLabel");
+const resizeValueInput    = document.getElementById("resizeValueInput");
+const resizeValueUnit     = document.getElementById("resizeValueUnit");
+const resizeCustomControl = document.getElementById("resizeCustomControl");
+const resizeWidthInput    = document.getElementById("resizeWidthInput");
+const resizeHeightInput   = document.getElementById("resizeHeightInput");
+const keepAspectCheck     = document.getElementById("keepAspectCheck");
+
 // ---- Helpers ----------------------------------------------------------------
 
 function formatBytes(bytes) {
@@ -377,6 +419,79 @@ function syncControlVisibility() {
   bgControl.classList.toggle("disabled", formatSelect.value !== "image/jpeg");
 }
 
+function syncResizeVisibility() {
+  const mode = resizeModeSelect.value;
+  if (mode === "none") {
+    resizeValueControl.style.display = "none";
+    resizeCustomControl.style.display = "none";
+  } else if (mode === "maxDim") {
+    resizeValueControl.style.display = "";
+    resizeCustomControl.style.display = "none";
+    resizeValueLabel.textContent = "Max Dimension";
+    resizeValueInput.setAttribute("min", "1");
+    resizeValueInput.setAttribute("max", "10000");
+    resizeValueInput.setAttribute("step", "1");
+    if (!resizeValueInput.value || resizeValueInput.value === "50") resizeValueInput.value = "1920";
+    resizeValueUnit.textContent = "px";
+  } else if (mode === "scale") {
+    resizeValueControl.style.display = "";
+    resizeCustomControl.style.display = "none";
+    resizeValueLabel.textContent = "Percentage Scale";
+    resizeValueInput.setAttribute("min", "1");
+    resizeValueInput.setAttribute("max", "500");
+    resizeValueInput.setAttribute("step", "1");
+    if (!resizeValueInput.value || resizeValueInput.value === "1920") resizeValueInput.value = "50";
+    resizeValueUnit.textContent = "%";
+  } else if (mode === "custom") {
+    resizeValueControl.style.display = "none";
+    resizeCustomControl.style.display = "";
+  }
+}
+
+function calculateDimensions(srcW, srcH) {
+  const mode = resizeModeSelect.value;
+  let targetW = srcW;
+  let targetH = srcH;
+
+  if (mode === "maxDim") {
+    const maxDim = parseInt(resizeValueInput.value, 10);
+    if (!isNaN(maxDim) && maxDim > 0 && (srcW > maxDim || srcH > maxDim)) {
+      const ratio = Math.min(maxDim / srcW, maxDim / srcH);
+      targetW = Math.max(1, Math.round(srcW * ratio));
+      targetH = Math.max(1, Math.round(srcH * ratio));
+    }
+  } else if (mode === "scale") {
+    const pct = parseFloat(resizeValueInput.value);
+    if (!isNaN(pct) && pct > 0) {
+      targetW = Math.max(1, Math.round(srcW * (pct / 100)));
+      targetH = Math.max(1, Math.round(srcH * (pct / 100)));
+    }
+  } else if (mode === "custom") {
+    const customW = parseInt(resizeWidthInput.value, 10);
+    const customH = parseInt(resizeHeightInput.value, 10);
+    const lock = keepAspectCheck.checked;
+
+    if (customW > 0 && customH > 0) {
+      if (lock) {
+        const ratio = Math.min(customW / srcW, customH / srcH);
+        targetW = Math.max(1, Math.round(srcW * ratio));
+        targetH = Math.max(1, Math.round(srcH * ratio));
+      } else {
+        targetW = customW;
+        targetH = customH;
+      }
+    } else if (customW > 0) {
+      targetW = customW;
+      targetH = lock ? Math.max(1, Math.round(srcH * (customW / srcW))) : srcH;
+    } else if (customH > 0) {
+      targetH = customH;
+      targetW = lock ? Math.max(1, Math.round(srcW * (customH / srcH))) : srcW;
+    }
+  }
+
+  return { targetW, targetH };
+}
+
 // ---- Loading files ----------------------------------------------------------
 
 function addFiles(fileArr) {
@@ -391,6 +506,10 @@ function addFiles(fileArr) {
       srcURL: URL.createObjectURL(file),   // local blob URL, no network
       srcSize: file.size,
       srcType: file.type,
+      srcWidth: null,
+      srcHeight: null,
+      outWidth: null,
+      outHeight: null,
       outMime: null,
       blob: null,
       outURL: null,
@@ -398,6 +517,13 @@ function addFiles(fileArr) {
       status: "pending",
     };
     items.push(item);
+
+    // Preload dimensions for the preview card
+    loadImage(item.srcURL).then(img => {
+      item.srcWidth = img.naturalWidth || img.width;
+      item.srcHeight = img.naturalHeight || img.height;
+      renderItem(item);
+    }).catch(() => {});
   }
   controlsCard.style.display = "";
   render();
@@ -438,20 +564,29 @@ async function convertItem(item) {
     const img = await loadImage(item.srcURL);
     const w = img.naturalWidth || img.width;
     const h = img.naturalHeight || img.height;
+    item.srcWidth = w;
+    item.srcHeight = h;
+
+    const { targetW, targetH } = calculateDimensions(w, h);
+    item.outWidth = targetW;
+    item.outHeight = targetH;
 
     const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = targetW;
+    canvas.height = targetH;
     const ctx = canvas.getContext("2d");
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
     // For JPG output, flatten any transparency onto the chosen solid color,
     // because JPG has no alpha channel (transparent areas would go black).
     if (mime === "image/jpeg") {
       ctx.fillStyle = bgColor.value;
-      ctx.fillRect(0, 0, w, h);
+      ctx.fillRect(0, 0, targetW, targetH);
     }
 
-    ctx.drawImage(img, 0, 0, w, h);
+    ctx.drawImage(img, 0, 0, targetW, targetH);
 
     const blob = await new Promise((resolve, reject) => {
       // PNG ignores the quality argument (lossless); passing it is harmless.
@@ -560,6 +695,10 @@ function cardInner(item) {
        ${savingsHtml(item.srcSize, item.outSize)}`
     : `<span>${formatBytes(item.srcSize)}</span>`;
 
+  const dimsHtml = item.status === "done" && item.outWidth
+    ? `<div class="dims"><code>${item.srcWidth}×${item.srcHeight}</code> <span class="arrow">→</span> <code>${item.outWidth}×${item.outHeight} px</code></div>`
+    : (item.srcWidth ? `<div class="dims"><code>${item.srcWidth}×${item.srcHeight} px</code></div>` : "");
+
   const statusHtml = {
     pending: '<span class="status pending">Ready</span>',
     working: '<span class="status working"><span class="spinner"></span> Converting…</span>',
@@ -586,6 +725,7 @@ function cardInner(item) {
         <span class="badge">${friendlyType(item.srcType)}</span>
         ${statusHtml}
       </div>
+      ${dimsHtml}
       <div class="sizes">${sizesHtml}</div>
       <div class="file-actions">
         <select class="per-file-fmt" title="Override output format for this file">${fmtOptions}</select>
@@ -628,6 +768,7 @@ function resetItemOutput(item) {
   if (item.outURL) URL.revokeObjectURL(item.outURL);
   item.blob = null; item.outURL = null; item.outSize = null;
   item.outName = null; item.outMimeUsed = null;
+  item.outWidth = null; item.outHeight = null;
   if (item.status === "done") item.status = "pending";
 }
 
@@ -706,6 +847,19 @@ formatSelect.addEventListener("change", () => {
 
 qualitySlider.addEventListener("input", () => { qualityValue.textContent = qualitySlider.value; });
 
+resizeModeSelect.addEventListener("change", () => {
+  syncResizeVisibility();
+  for (const it of items) resetItemOutput(it);
+  render();
+});
+
+[resizeValueInput, resizeWidthInput, resizeHeightInput, keepAspectCheck].forEach(el => {
+  el.addEventListener("input", () => {
+    for (const it of items) resetItemOutput(it);
+    render();
+  });
+});
+
 convertBtn.addEventListener("click", convertAll);
 zipBtn.addEventListener("click", downloadZip);
 clearBtn.addEventListener("click", clearAll);
@@ -732,6 +886,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 }
 
 syncControlVisibility();
+syncResizeVisibility();
 </script>
 </body>
 </html>
