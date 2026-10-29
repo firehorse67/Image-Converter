@@ -20,15 +20,16 @@
 <meta name="theme-color" content="#1565c0">
 
 <!-- JSZip for the "Download All as ZIP" feature.
-     Loaded from cdnjs. If the CDN is unreachable (e.g. fully offline first run),
-     the ZIP button degrades gracefully: it disables itself and tells you to use
-     the per-file download links instead. To make this tool 100% offline and
-     self-contained, vendor jszip.min.js locally and point this src at it. -->
-<script
-  src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
-  integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg=="
-  crossorigin="anonymous"
-  referrerpolicy="no-referrer"></script>
+     Vendored locally (vendor/jszip.min.js, v3.10.1) rather than loaded from a
+     CDN, so the tool makes ZERO network requests and the ZIP feature works
+     offline and under file:// — including when launched as a Chrome --app
+     window, where there is no service worker to cache a CDN response.
+     The vendored file is byte-identical to the cdnjs build it replaces
+     (sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg==).
+     Note: no integrity= attribute here — SRI is not enforced for file:// URLs
+     and is redundant for a same-origin file committed to the repo.
+     To update: npm pack jszip@<version>, copy dist/jszip.min.js into vendor/. -->
+<script src="vendor/jszip.min.js"></script>
 
 <style>
   :root {
@@ -300,7 +301,7 @@
     </div>
     <p class="hint" id="jszipHint" style="display:none;">
       ⚠️ ZIP library (JSZip) didn't load — the “Download all as ZIP” button is disabled.
-      Use the per-file download links, or connect once to load the library.
+      Check that <code>vendor/jszip.min.js</code> sits next to this file; per-file downloads still work.
     </p>
     <p class="hint">
       Transparent PNGs exported to JPG are flattened onto the chosen color (JPG has no transparency).
@@ -327,9 +328,10 @@
  * any point. Conversion is done by drawing to an offscreen <canvas> and calling
  * canvas.toBlob(mime, quality).
  *
- * The only third-party code is JSZip (loaded via CDN in <head>) used solely to
- * bundle converted files into a single ZIP download. If it fails to load, the
- * ZIP button disables itself and per-file downloads still work.
+ * The only third-party code is JSZip, vendored locally at vendor/jszip.min.js
+ * and used solely to bundle converted files into a single ZIP download. Nothing
+ * is fetched over the network at any point. If the vendored file is missing,
+ * the ZIP button disables itself and per-file downloads still work.
  * ========================================================================== */
 
 // ---- Constants & state ------------------------------------------------------
@@ -380,6 +382,17 @@ const resizeHeightInput   = document.getElementById("resizeHeightInput");
 const keepAspectCheck     = document.getElementById("keepAspectCheck");
 
 // ---- Helpers ----------------------------------------------------------------
+
+// Escape text before interpolating it into innerHTML. Filenames are attacker-
+// controlled in the sense that they come from whoever produced the file, and a
+// name like  foo" onerror="…" x=".png  would otherwise break out of an
+// attribute and inject a live event handler. Also makes names containing
+// & < > " ' display correctly instead of being parsed as markup.
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
 
 function formatBytes(bytes) {
   if (bytes === 0) return "0 B";
@@ -703,11 +716,11 @@ function cardInner(item) {
     pending: '<span class="status pending">Ready</span>',
     working: '<span class="status working"><span class="spinner"></span> Converting…</span>',
     done:    '<span class="status done">✓ Done</span>',
-    error:   `<span class="status error">✕ ${item.error || "Error"}</span>`,
+    error:   `<span class="status error">✕ ${escapeHtml(item.error || "Error")}</span>`,
   }[item.status];
 
   const dlHtml = item.status === "done"
-    ? `<a class="dl-link" href="${item.outURL}" download="${item.outName}">Download ${MIME_LABEL[item.outMimeUsed]}</a>`
+    ? `<a class="dl-link" href="${item.outURL}" download="${escapeHtml(item.outName)}">Download ${MIME_LABEL[item.outMimeUsed]}</a>`
     : "";
 
   // Per-file format override select.
@@ -716,13 +729,13 @@ function cardInner(item) {
   ).join("");
 
   return `
-    <div class="thumb-wrap"><img src="${item.srcURL}" alt="${item.name}" loading="lazy"></div>
+    <div class="thumb-wrap"><img src="${item.srcURL}" alt="${escapeHtml(item.name)}" loading="lazy"></div>
     <div class="file-body">
-      <div class="fname">${item.name}
+      <div class="fname">${escapeHtml(item.name)}
         <button class="remove-x" title="Remove" aria-label="Remove">&times;</button>
       </div>
       <div class="meta">
-        <span class="badge">${friendlyType(item.srcType)}</span>
+        <span class="badge">${escapeHtml(friendlyType(item.srcType))}</span>
         ${statusHtml}
       </div>
       ${dimsHtml}

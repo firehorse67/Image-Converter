@@ -1,0 +1,27 @@
+[Desktop Entry]
+Type=Application
+Name=Image Converter
+GenericName=Image Format Converter
+Comment=Convert images between PNG, JPG and WebP — entirely offline
+Keywords=image;convert;png;jpg;jpeg;webp;resize;photo;
+
+# Launches as a standalone Chrome app window (no tabs or address bar).
+# Adjust the path if you keep the app somewhere other than ~/Apps/Images.
+Exec=google-chrome-stable --app=file:///home/michael/Apps/Images/index.html
+Icon=/home/michael/Apps/Images/icons/icon-512.png
+
+Categories=Graphics;2DGraphics;RasterGraphics;Utility;
+MimeType=
+Path=
+Terminal=false
+TerminalOptions=
+StartupNotify=true
+
+# Makes the window group under this launcher (and show the camera icon) in the
+# taskbar/dock instead of appearing as a generic Chrome window. Chrome derives
+# this class from the --app URL, so it must match the Exec line above.
+StartupWMClass=chrome-file__home_michael_Apps_Images_index.html-Default
+
+PrefersNonDefaultGPU=false
+X-KDE-SubstituteUID=false
+X-KDE-Username=

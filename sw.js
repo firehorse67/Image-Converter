@@ -5,17 +5,17 @@
  * http(s). This does NOT run under file:// — browsers refuse to register a
  * service worker from a file URL, and the app doesn't need it there anyway.
  *
- * Strategy: cache-first for the app shell (the HTML, manifest, and icons).
- * JSZip is loaded from a CDN and is intentionally NOT cached here to avoid
- * cross-origin opaque-response bloat; if you want the ZIP feature offline,
- * vendor jszip.min.js locally and add it to APP_SHELL below.
+ * Strategy: cache-first for the app shell (the HTML, manifest, icons, and the
+ * vendored JSZip). Every asset is same-origin — the app makes no cross-origin
+ * requests at all — so the whole thing caches cleanly with no opaque responses.
  */
-const CACHE = "image-converter-v2";
+const CACHE = "image-converter-v3";
 
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
+  "./vendor/jszip.min.js",
   "./icons/camera.svg",
   "./icons/favicon.ico",
   "./icons/favicon-16.png",
@@ -41,8 +41,8 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  // Only handle same-origin GETs from our shell; let everything else (e.g. the
-  // JSZip CDN request) go straight to the network.
+  // Only handle same-origin GETs from our shell; anything else goes straight to
+  // the network (in practice the app never makes cross-origin requests).
   if (req.method !== "GET" || new URL(req.url).origin !== self.location.origin) return;
 
   event.respondWith(
