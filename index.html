@@ -2,6 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- Content-Security-Policy: makes "nothing leaves your machine" something the
+     browser enforces rather than a promise. connect-src 'none' blocks fetch,
+     XHR, WebSocket and beacons, so even injected code could not send image data
+     anywhere; form-action/base-uri/object-src close the other exfiltration and
+     hijack routes. Scripts may only come from this folder (vendor/jszip.min.js)
+     or the inline <script> below. Verified working under file:// and http(s).
+     If you add a feature that needs a new resource type, extend this first. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'none'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Image Converter — PNG · JPG · WebP</title>
 
@@ -301,6 +309,7 @@
       <button class="btn secondary" id="clearBtn">Clear</button>
       <span id="summary"></span>
     </div>
+    <p class="hint" id="zipError" style="display:none; color: var(--danger);"></p>
     <p class="hint" id="jszipHint" style="display:none;">
       ⚠️ ZIP library (JSZip) didn't load — the “Download all as ZIP” button is disabled.
       Check that <code>vendor/jszip.min.js</code> sits next to this file; per-file downloads still work.
@@ -373,6 +382,7 @@ const clearBtn      = document.getElementById("clearBtn");
 const summary       = document.getElementById("summary");
 const fileList      = document.getElementById("fileList");
 const jszipHint     = document.getElementById("jszipHint");
+const zipError      = document.getElementById("zipError");
 
 const resizeModeSelect   = document.getElementById("resizeModeSelect");
 const resizeValueControl  = document.getElementById("resizeValueControl");
@@ -728,16 +738,39 @@ async function convertItem(item) {
   renderItem(item);
 }
 
+// While a batch runs, every setting is locked. convertItem reads the settings
+// as it goes, so changing one mid-batch used to finish the in-flight image
+// with a mix of old and new settings yet still mark it Done. Removing a card
+// mid-batch would also shift the array under the loop and skip an image.
+let busy = false;
+
+const SETTINGS_CONTROLS = [
+  formatSelect, qualitySlider, bgColor, resizeModeSelect,
+  resizeValueInput, resizeWidthInput, resizeHeightInput, keepAspectCheck, clearBtn,
+];
+
+function setBusy(on) {
+  busy = on;
+  for (const el of SETTINGS_CONTROLS) el.disabled = on;
+  convertBtn.disabled = on;
+  // Per-card format selects and remove buttons read `busy` when rendered.
+  refreshCards();
+}
+
 async function convertAll() {
-  convertBtn.disabled = true;
+  // Apply any settings change still waiting in a debounce timer now, before
+  // the batch starts, rather than letting it fire half-way through.
+  flushInvalidation();
+  setBusy(true);
   zipBtn.disabled = true;
-  // Convert sequentially to keep memory bounded on large batches.
-  for (const item of items) {
-    await convertItem(item);
+  try {
+    // Convert sequentially to keep memory bounded on large batches.
+    for (const item of items) {
+      await convertItem(item);
+    }
+  } finally {
+    setBusy(false);
   }
-  convertBtn.disabled = false;
-  updateSummary();
-  updateZipButton();
 }
 
 // ---- ZIP download -----------------------------------------------------------
@@ -750,35 +783,52 @@ async function downloadZip() {
   zipBtn.disabled = true;
   const original = zipBtn.textContent;
   zipBtn.innerHTML = '<span class="spinner"></span> Zipping…';
+  zipError.style.display = "none";
 
-  const zip = new JSZip();
-  const usedNames = new Map();
-  for (const item of done) {
-    // Avoid name collisions inside the ZIP (e.g. two files named the same).
-    let name = item.outName;
-    if (usedNames.has(name)) {
-      const n = usedNames.get(name) + 1;
-      usedNames.set(name, n);
-      const dot = name.lastIndexOf(".");
-      name = name.slice(0, dot) + "-" + n + name.slice(dot);
-    } else {
-      usedNames.set(name, 1);
+  try {
+    const zip = new JSZip();
+    const taken = new Set();
+    for (const item of done) {
+      const name = uniqueName(item.outName, taken);
+      taken.add(name.toLowerCase());
+      zip.file(name, item.blob);
     }
-    zip.file(name, item.blob);
+
+    const content = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(content);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "converted-images.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch (err) {
+    zipError.textContent = "⚠️ Couldn't build the ZIP (" + err.message +
+      "). The per-file download links still work.";
+    zipError.style.display = "";
+  } finally {
+    // Without this, a failure left the button disabled on its spinner for good.
+    zipBtn.textContent = original;
+    updateZipButton();
   }
+}
 
-  const content = await zip.generateAsync({ type: "blob" });
-  const url = URL.createObjectURL(content);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "converted-images.zip";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-
-  zipBtn.textContent = original;
-  zipBtn.disabled = false;
+// Pick a ZIP entry name not already used. JSZip silently overwrites an entry
+// with the same name, so a collision means a file vanishes from the archive.
+// Checking against every name already taken — not just repeats of this one —
+// matters: two "a.png" plus a real "a-2.png" used to produce only two entries.
+// Compared case-insensitively, since a.jpg and A.jpg collide when extracted
+// on Windows and macOS.
+function uniqueName(name, taken) {
+  if (!taken.has(name.toLowerCase())) return name;
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  for (let n = 2; ; n++) {
+    const candidate = `${base}-${n}${ext}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
 }
 
 // ---- Rendering --------------------------------------------------------------
@@ -846,7 +896,7 @@ function cardBody(item) {
 
   return `
       <div class="fname">${escapeHtml(item.name)}
-        <button class="remove-x" title="Remove" aria-label="Remove">&times;</button>
+        <button class="remove-x" title="Remove" aria-label="Remove" ${busy ? "disabled" : ""}>&times;</button>
       </div>
       <div class="meta">
         <span class="badge">${escapeHtml(friendlyType(item.srcType))}</span>
@@ -855,7 +905,7 @@ function cardBody(item) {
       ${dimsHtml}
       <div class="sizes">${sizesHtml}</div>
       <div class="file-actions">
-        <select class="per-file-fmt" title="Override output format for this file">${fmtOptions}</select>
+        <select class="per-file-fmt" title="Override output format for this file" ${busy ? "disabled" : ""}>${fmtOptions}</select>
         ${dlHtml}
       </div>
   `;
@@ -984,26 +1034,58 @@ formatSelect.addEventListener("change", () => {
   refreshCards();
 });
 
-qualitySlider.addEventListener("input", () => { qualityValue.textContent = qualitySlider.value; });
-
 resizeModeSelect.addEventListener("change", () => {
   syncResizeVisibility();
   for (const it of items) resetItemOutput(it);
   refreshCards();
 });
 
-// The resize number fields fire on every keystroke. Invalidating and
-// re-rendering synchronously on each one rebuilt all cards per character, which
-// is visibly janky on a large batch. Coalesce into one update per pause.
-let resizeDebounce = null;
+/*
+ * Debounced invalidation.
+ *
+ * Any setting that changes the output must reset the cards it affects, or a
+ * card keeps saying "Done" while its download was made with the old setting.
+ * Sliders, colour pickers and number fields fire on every movement or
+ * keystroke, so changes are coalesced into one update per pause. Each pending
+ * change names which finished outputs it affects; the reset runs when the
+ * timer fires, or immediately via flushInvalidation() when a batch starts.
+ */
+let invalidateTimer = null;
+const pendingInvalidations = [];
+
+function scheduleInvalidation(affects) {
+  pendingInvalidations.push(affects);
+  clearTimeout(invalidateTimer);
+  invalidateTimer = setTimeout(flushInvalidation, 200);
+}
+
+function flushInvalidation() {
+  clearTimeout(invalidateTimer);
+  invalidateTimer = null;
+  if (pendingInvalidations.length === 0) return;
+  const checks = pendingInvalidations.splice(0);
+  for (const it of items) {
+    if (checks.some(affects => affects(it))) resetItemOutput(it);
+  }
+  refreshCards();
+}
+
+const LOSSY = new Set(["image/jpeg", "image/webp"]);
+
+// Quality only changes JPG and WebP output; PNG is lossless and ignores it.
+qualitySlider.addEventListener("input", () => {
+  qualityValue.textContent = qualitySlider.value;
+  scheduleInvalidation(it => LOSSY.has(it.outMimeUsed));
+});
+
+// The flatten colour only appears in JPG output (the only format without alpha).
+bgColor.addEventListener("input", () => {
+  scheduleInvalidation(it => it.outMimeUsed === "image/jpeg");
+});
+
+// Resize settings change the dimensions of every output.
 [resizeValueInput, resizeWidthInput, resizeHeightInput, keepAspectCheck].forEach(el => {
-  el.addEventListener("input", () => {
-    clearTimeout(resizeDebounce);
-    resizeDebounce = setTimeout(() => {
-      for (const it of items) resetItemOutput(it);
-      refreshCards();
-    }, 200);
-  });
+  el.addEventListener("input", () => scheduleInvalidation(() => true));
 });
 
 convertBtn.addEventListener("click", convertAll);

@@ -9,7 +9,7 @@
  * vendored JSZip). Every asset is same-origin — the app makes no cross-origin
  * requests at all — so the whole thing caches cleanly with no opaque responses.
  */
-const CACHE = "image-converter-v3";
+const CACHE = "image-converter-v4";
 
 const APP_SHELL = [
   "./",
